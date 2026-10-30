@@ -4,6 +4,7 @@ yun 项目测试用例库（test case library of project yun）。
 
 收录可复现的车辆路径与调度算例，用于：
 
+- 功能测试：基本功能测试保证版本符合设计的功能和规则；
 - 回归测试：改动求解器后确认已知算例的解不退化；
 - 质量对比：当前解与基准已知最优解（BKS）的 gap；
 - 性能基准：同一算例上的求解耗时与稳定性。
@@ -45,6 +46,9 @@ yun 项目测试用例库（test case library of project yun）。
 | `LocationAvailableVehicle.csv`、`DistMatrixCode.csv`、`*LabelValue.csv`、`*DimensionValue.csv` | 附属表：节点可用车辆、矩阵口径、标签与维度取值（本算例多为空表） |
 
 空表只保留表头，用于占住 schema，导入时按空数据处理。
+
+## 功能测试流程
+1. 读取[FEATURE_TESTS_CASES.md](feature_tests/FEATURE_TESTS_CASES.md)完成所有功能测试。
 
 ## 新增或更新算例
 
