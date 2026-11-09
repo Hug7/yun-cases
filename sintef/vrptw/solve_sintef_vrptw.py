@@ -6,10 +6,15 @@
     python sintef/vrptw/solve_sintef_vrptw.py
     python sintef/vrptw/solve_sintef_vrptw.py --jobs 4 --only c1_2_1 r2_2_3
     python sintef/vrptw/solve_sintef_vrptw.py --skip-filled
+    python sintef/vrptw/solve_sintef_vrptw.py --strategy-lua sintef/vrptw/Strategy.lua
 
 算例从 ``<zip-dir>/<instance>.zip`` 解压到 ``<work-dir>/<instance>/``，求解产物
 （``output/<request_id>/``）留在工作目录，不写入仓库。CSV 的 ``Bks*`` 列原样保留，
 只回填 ``Yun*`` 与 ``Gap*`` 列，每完成一个算例就原子重写一次，便于中断续跑。
+
+解压完成后，脚本默认用 ``--strategy-lua``（默认 ``sintef/vrptw/Strategy.lua``）覆盖
+每个算例目录里的 ``Strategy.lua``，保证同一批结果使用同一套求解策略；``--no-strategy-override``
+可让算例使用压缩包自带策略。
 """
 
 from __future__ import annotations
@@ -49,6 +54,8 @@ CASE_FILES = (
     "Vehicle.csv",
     "DistMatrix.csv",
 )
+
+STRATEGY_FILE = "Strategy.lua"
 
 JUNK_SUFFIXES = (".DS_Store",)
 
@@ -104,6 +111,20 @@ def extract_cases(zip_dir: Path, work_dir: Path, names: list[str], force: bool) 
             raise ValueError(f"{archive} 解压后缺少必需文件：{target}")
         case_dirs[name] = target
     return case_dirs
+
+
+def apply_strategy(case_dir: Path, strategy_path: Path) -> bool:
+    """用统一的策略脚本覆盖算例目录里的 ``Strategy.lua``。
+
+    返回内容是否发生变化，便于汇总日志。始终覆盖（而不是只在缺失时写入），
+    保证即使算例目录已经解压过，也会用当前版本的策略重新求解。
+    """
+    content = strategy_path.read_bytes()
+    target = case_dir / STRATEGY_FILE
+    if target.is_file() and target.read_bytes() == content:
+        return False
+    target.write_bytes(content)
+    return True
 
 
 def solve_one(task: tuple[str, str, str]) -> dict[str, Any]:
@@ -168,10 +189,12 @@ def fill_row(row: dict[str, str], result: dict[str, Any]) -> dict[str, str]:
     bks_distance = float(row["BksDistance"])
     yun_vehicle = result["vehicles"]
     yun_distance = result["distance"]
+    gap_vehicle = yun_vehicle - bks_vehicle
     row["YunVehicle"] = str(yun_vehicle)
     row["YunDistance"] = f"{yun_distance:.2f}"
-    row["GapVehicle"] = str(yun_vehicle - bks_vehicle)
-    row["GapDistance"] = f"{abs(yun_distance - bks_distance) / bks_distance:.2f}"
+    row["GapVehicle"] = str(gap_vehicle)
+    # 登记表约定：车辆数有差异时不统计距离 gap，留空。
+    row["GapDistance"] = "" if gap_vehicle else f"{abs(yun_distance - bks_distance) / bks_distance:.3f}"
     return row
 
 
@@ -206,7 +229,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--log-level", default="warn", help="求解器日志级别")
     parser.add_argument("--skip-filled", action="store_true", help="跳过 CSV 中已回填 Yun 结果的算例")
     parser.add_argument("--reextract", action="store_true", help="重新解压算例目录")
+    parser.add_argument(
+        "--strategy-lua",
+        type=Path,
+        default=script_dir / STRATEGY_FILE,
+        help="统一策略脚本，解压后覆盖每个算例的 Strategy.lua",
+    )
+    parser.add_argument(
+        "--no-strategy-override",
+        action="store_true",
+        help="不覆盖算例自带的 Strategy.lua，改用压缩包里的策略",
+    )
     args = parser.parse_args(argv)
+
+    if not args.no_strategy_override and not args.strategy_lua.is_file():
+        parser.error(f"统一策略脚本不存在：{args.strategy_lua}")
 
     rows = read_rows(args.csv)
     by_name = {row["Instance"]: row for row in rows}
@@ -228,6 +265,12 @@ def main(argv: list[str] | None = None) -> int:
     log(f"待求解：{len(names)} 个，并行度 {args.jobs}")
 
     case_dirs = extract_cases(args.zip_dir, args.work_dir, names, force=args.reextract)
+
+    if args.no_strategy_override:
+        log("策略覆盖：已关闭，使用压缩包自带的 Strategy.lua")
+    else:
+        changed = sum(apply_strategy(case_dirs[name], args.strategy_lua) for name in names)
+        log(f"策略覆盖：{args.strategy_lua} → {len(names)} 个算例的 Strategy.lua（{changed} 个内容有变化）")
 
     tasks = [(name, str(case_dirs[name]), args.log_level) for name in names]
     started = time.time()
@@ -270,6 +313,7 @@ def main(argv: list[str] | None = None) -> int:
         "zip_dir": str(args.zip_dir),
         "csv": str(args.csv),
         "jobs": args.jobs,
+        "strategy_lua": None if args.no_strategy_override else str(args.strategy_lua),
         "results": results,
         "failures": failures,
     }

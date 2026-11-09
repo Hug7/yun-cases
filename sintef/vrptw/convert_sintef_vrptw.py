@@ -70,8 +70,10 @@ function solve()
     local parameter = KnnParameter()
     parameter.neighbor_count = 12
     construct_knn(parameter)
-    alns({ worker_count = 4, max_iter = 1000, max_unimproved_iter = 400,
-           ruin_operator_params = { { code = "RuinRandomRemovalLoad" }, { code = "RuinRandomRemovalOrder" } },
+    alns({ worker_count = 4, max_iter = 1000, max_unimproved_iter = 300, print_operator_statistics = true,
+           ruin_operator_params = { { code = "RuinRandomRemovalLoad" },
+                                    { code = "RuinRandomRemovalOrder" },
+                                    { code = "RuinWorstRemovalOrder" }},
            repair_operator_params = {
                { code = "RepairGreedy" },
                { code = "RepairGreedy", params = { top_rate = 0.0001 } },

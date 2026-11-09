@@ -9,7 +9,7 @@
 
 项目`yun`对比`BKS`的登记表见 [SINTER_VRPTW_INSTANCE.csv](SINTER_VRPTW_INSTANCE.csv)
 
-其中，表字段如下：
+表字段如下：
 
 | 字段            | 说明                                              | 示例      |
 |---------------|-------------------------------------------------|---------|
@@ -20,3 +20,5 @@
 | `YunDistance` | Yun得到最优的总距离                                     | 2704.57 |
 | `GapVehicle`  | `YunVehicle`-`BksVehicle`                       | 0       |
 | `GapDistance` | \|`YunDistance`-`BksDistance`\| / `BksDistance` | 0.000   |
+
+其中，`GapVehicle` 则不统计 `GapDistance` 设置为空。
