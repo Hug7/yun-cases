@@ -18,12 +18,13 @@
 输出是与 ``tests/data/c1_2_1`` 相同的表结构（CSV + ``Parameter.yaml`` +
 ``Strategy.lua``），供 ``yunpyopt.solve`` 直接求解。
 
-转换约定（Homberger/Solomon 的时间与距离单位都是“分钟”）：
+转换约定（Homberger/Solomon 的原始时间单位是“分钟”，本用例把整条时间轴
+放大 60 倍、按小时解释，以免 yun 的分钟级时间精度截断 2 位小数的距离）：
 
-* 1 个距离单位 = 1 分钟行驶时间 = 1000 米；
-* 1 个时间单位 = 1 分钟，所有时刻平移到 ``BASE_DATETIME``
+* 1 个距离单位 = 1 小时行驶时间 = 1000 米；
+* 原始时间值按小时换算：所有时刻为 ``BASE_DATETIME + 值小时``
   （``CargoOrder`` 的最小精度是分钟，不能直接写相对时间）；
-* 客户服务时间写入 ``WorkFixed.FixedDropTime``（秒）；
+* 客户服务时间写入 ``WorkFixed.FixedDropTime``（秒，原始分钟值 × 3600）；
 * 需求量写入 ``weight`` 维度，车辆容量写入同一维度；
 * 每个客户一条 ``CargoOrder``：从车场提货、送到客户；
 * 车场车辆的起点/终点都是车场，保证车次回场；
@@ -34,7 +35,7 @@
 
 用法::
 
-    python scripts/convert_sintef_vrptw.py C1_2_1.TXT tests/data/c1_2_1 --vehicles 60
+    python sintef/vrptw/convert_sintef_vrptw.py C1_2_1.TXT tests/data/c1_2_1 --vehicles 60
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 BASE_DATETIME = datetime(2026, 1, 1, 0, 0)
-SECONDS_PER_MINUTE = 60
+SECONDS_PER_HOUR = 3600
 METERS_PER_DISTANCE_UNIT = 1000
 
 DEPOT_CODE = "DEPOT"
@@ -64,22 +65,37 @@ CHARGE_RULE_CODE = "R_VRPTW_STD"
 FIXED_COST_YUAN = 100000
 
 STRATEGY_LUA = """\
--- 由 scripts/convert_sintef_vrptw.py 生成。
+-- 由 sintef/vrptw/convert_sintef_vrptw.py 生成。
 -- 只做 KNN 构造并快照：测试用例不依赖 ALNS 的随机迭代，求解快且可复现。
 function solve()
-    local parameter = KnnParameter()
-    parameter.neighbor_count = 12
-    construct_knn(parameter)
-    alns({ worker_count = 4, max_iter = 1000, max_unimproved_iter = 300, print_operator_statistics = true,
-           ruin_operator_params = { { code = "RuinRandomRemovalLoad" },
-                                    { code = "RuinRandomRemovalOrder" },
-                                    { code = "RuinWorstRemovalOrder" }},
+    construct_knn({ neighbor_count = 8 })
+    alns({ worker_count = 4,
+           max_iter = 1000,
+           max_sub_iter = 20,
+           max_unimproved_iter = 500,
+           print_operator_statistics = true,
+           max_stagnate_iter = 5,
+           operator_weight_update_interval_iter = 5,
+           ruin_operator_params = { { code = "RuinRandomRemovalLoad", params = { select_load_min_rate = 0.0001, select_load_max_rate = 0.01 } },
+                                    { code = "RuinRandomRemovalLoad", params = { select_load_min_rate = 0.01, select_load_max_rate = 0.25 } },
+                                    { code = "RuinRandomRemovalOrder", params = { select_order_min_rate = 0.0001, select_order_max_rate = 0.1 } },
+                                    { code = "RuinRandomRemovalOrder", params = { select_order_min_rate = 0.1, select_order_max_rate = 0.3 } },
+                                    { code = "RuinWorstRemovalOrder", params = { select_order_min_rate = 0.0001, select_order_max_rate = 0.1 } },
+                                    { code = "RuinWorstRemovalOrder", params = { select_order_min_rate = 0.1, select_order_max_rate = 0.3 } }
+           },
            repair_operator_params = {
                { code = "RepairGreedy" },
                { code = "RepairGreedy", params = { top_rate = 0.0001 } },
                { code = "RepairRegretK" },
                { code = "RepairRegretK", params = { regret_k = 3 } },
-           } })
+           },
+           local_search = {
+               max_evaluated = 300,
+               improvement = "first",
+           }
+    })
+
+    local_search({ improvement = "best" })
 end
 """
 
@@ -174,8 +190,8 @@ def _int_rows(lines: Iterable[str], expected: int) -> list[list[int]]:
             yield values
 
 
-def _time(minutes: int) -> str:
-    return (BASE_DATETIME + timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M")
+def _time(hours: int) -> str:
+    return (BASE_DATETIME + timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M")
 
 
 def _write_csv(path: Path, header: Sequence[str], rows: Iterable[Sequence[object]]) -> None:
@@ -224,7 +240,7 @@ def _write_static_tables(root: Path, instance: Instance, latest_due: dict[int, i
             [
                 customer.code,
                 0,
-                customer.service * SECONDS_PER_MINUTE if customer.index != 0 else 0,
+                customer.service * SECONDS_PER_HOUR if customer.index != 0 else 0,
             ]
             for customer in instance.customers
         ],
@@ -248,7 +264,7 @@ def _write_static_tables(root: Path, instance: Instance, latest_due: dict[int, i
     _write_csv(
         root / "Vehicle.csv",
         ["CarrierCode", "VehicleModelCode", "Count", "OriginLocationCode", "DestinationLocationCode"],
-        [[CARRIER_CODE, VEHICLE_MODEL_CODE, instance.vehicle_count, DEPOT_CODE, DEPOT_CODE]],
+        [[CARRIER_CODE, VEHICLE_MODEL_CODE, instance.vehicle_count, "", DEPOT_CODE]],
     )
 
     # 订单：车场提货 -> 客户送达
@@ -351,13 +367,14 @@ def _write_dist_matrix(root: Path, instance: Instance) -> None:
             if source.index == target.index:
                 continue
             distance = math.hypot(source.x - target.x, source.y - target.y)
+            distance = round(distance, 2)
             rows.append(
                 [
                     source.code,
                     target.code,
                     DIST_MATRIX_CODE,
                     round(distance * METERS_PER_DISTANCE_UNIT),
-                    round(distance * SECONDS_PER_MINUTE),
+                    round(distance * SECONDS_PER_HOUR),
                 ]
             )
     _write_csv(
@@ -375,6 +392,7 @@ def _write_config(root: Path, instance: Instance) -> None:
                 f"end_time: {_time(instance.depot.due)}",
                 "strategy_file: Strategy.lua",
                 "load_unload_policy: FILO",
+                "hard_constr_precheck: true",
                 "soft_constraints:",
                 "  - code: Distance",
                 "    params: {dist_factor: 0.001}",
